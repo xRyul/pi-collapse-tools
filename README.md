@@ -1,5 +1,7 @@
 # pi-collapse-tools
 
+![Tool output collapse demo](https://raw.githubusercontent.com/xRyul/pi-collapse-tools/main/assets/demo.webp)
+
 A **pi** extension that keeps your chat clean by hiding tool output by default.
 
 - Tool calls still render with their key parameters (so you can see what ran).
