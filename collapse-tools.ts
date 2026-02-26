@@ -3,17 +3,21 @@
  *
  * Shows full tool call with parameters, but hides output by default.
  * Press Cmd+O (or Ctrl+O) to expand and view full output.
+ *
+ * Note: extension-registered tools are enabled by default in pi. To avoid
+ * accidentally enabling tools the user did not request, this extension only
+ * overrides the built-in tools enabled via `--tools` / `--no-tools`.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
   createBashTool,
+  createEditTool,
+  createFindTool,
+  createGrepTool,
+  createLsTool,
   createReadTool,
   createWriteTool,
-  createEditTool,
-  createGrepTool,
-  createFindTool,
-  createLsTool,
 } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 
@@ -106,20 +110,78 @@ function makeRenderResult(toolName: string, originalRenderResult?: any) {
   };
 }
 
+type BuiltInToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls";
+
+const VALID_TOOL_NAMES: BuiltInToolName[] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+const VALID_TOOL_SET = new Set<string>(VALID_TOOL_NAMES);
+const DEFAULT_TOOL_NAMES: BuiltInToolName[] = ["read", "bash", "edit", "write"];
+
+function parseToolSelectionFromArgv(argv: string[]): { noTools: boolean; tools?: BuiltInToolName[] } {
+  let noTools = false;
+  let toolsRaw: string | undefined;
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--no-tools") {
+      noTools = true;
+      continue;
+    }
+
+    // pi itself only supports `--tools <list>`, but we also accept `--tools=<list>`.
+    if (arg === "--tools" && i + 1 < argv.length) {
+      toolsRaw = argv[i + 1];
+      i++;
+      continue;
+    }
+
+    if (arg.startsWith("--tools=")) {
+      toolsRaw = arg.slice("--tools=".length);
+      continue;
+    }
+  }
+
+  if (!toolsRaw) return { noTools, tools: undefined };
+
+  const parsed = toolsRaw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .filter((name) => VALID_TOOL_SET.has(name)) as BuiltInToolName[];
+
+  // Dedupe while keeping order
+  const seen = new Set<string>();
+  const tools = parsed.filter((name) => (seen.has(name) ? false : (seen.add(name), true)));
+
+  return { noTools, tools };
+}
+
+function getToolNamesToOverride(): BuiltInToolName[] {
+  const { noTools, tools } = parseToolSelectionFromArgv(process.argv.slice(2));
+
+  // Mirror pi semantics:
+  // - default: read,bash,edit,write
+  // - --tools: explicit list
+  // - --no-tools: none (unless --tools is also specified)
+  if (noTools) return tools ?? [];
+  return tools ?? DEFAULT_TOOL_NAMES;
+}
+
 export default function (pi: ExtensionAPI) {
   const cwd = process.cwd();
+  const toolNames = getToolNamesToOverride();
 
-  const tools = [
-    createReadTool(cwd),
-    createBashTool(cwd),
-    createWriteTool(cwd),
-    createEditTool(cwd),
-    createGrepTool(cwd),
-    createFindTool(cwd),
-    createLsTool(cwd),
-  ];
+  const factories: Record<BuiltInToolName, () => any> = {
+    read: () => createReadTool(cwd),
+    bash: () => createBashTool(cwd),
+    write: () => createWriteTool(cwd),
+    edit: () => createEditTool(cwd),
+    grep: () => createGrepTool(cwd),
+    find: () => createFindTool(cwd),
+    ls: () => createLsTool(cwd),
+  };
 
-  for (const tool of tools) {
+  for (const name of toolNames) {
+    const tool = factories[name]();
     pi.registerTool({
       name: tool.name,
       label: tool.label,
@@ -132,6 +194,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async (_event, ctx) => {
-    ctx.ui.notify("Collapse Tools: outputs hidden (Cmd+O to expand)", "info");
+    const wrapped = toolNames.length > 0 ? toolNames.join(", ") : "none";
+    ctx.ui.notify(`Collapse Tools: outputs hidden (Cmd+O to expand) • wrapped: ${wrapped}`, "info");
   });
 }

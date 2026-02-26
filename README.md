@@ -32,11 +32,14 @@ pi install git:github.com/xRyul/pi-collapse-tools
 
 ## What it does (technical)
 
-This extension **overrides** pi’s built-in tools by registering tools with the same names:
-
-- `read`, `bash`, `write`, `edit`, `grep`, `find`, `ls`
+This extension **overrides** pi’s built-in tools by registering tools with the same names, *but only for the tools you enabled* via `--tools` / `--no-tools` (default: `read,bash,edit,write`).
 
 It delegates execution to the built-in implementations, but changes rendering so output is collapsed by default.
+
+Examples:
+- Default tools: `pi` → wraps `read`, `bash`, `edit`, `write`
+- Read-only: `pi --tools read,grep,find,ls` → also wraps `grep`, `find`, `ls`
+- No tools: `pi --no-tools` → wraps nothing (does not re-enable tools)
 
 ## Notes
 
