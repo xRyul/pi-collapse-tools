@@ -77,7 +77,7 @@ function renderSimpleDiff(diffText: string, theme: any): string {
 
 // Render the result: hidden by default, shown when expanded
 function makeRenderResult(toolName: string, originalRenderResult?: any) {
-  return (result: any, options: any, theme: any) => {
+  return (result: any, options: any, theme: any, context: any) => {
     const { expanded, isPartial } = options;
 
     if (isPartial) {
@@ -85,9 +85,9 @@ function makeRenderResult(toolName: string, originalRenderResult?: any) {
       return new Text(theme.fg("dim", "Running..."), 0, 0);
     }
 
-    // Collapsed: render nothing under the call
+    // Collapsed: render a valid empty component so current pi versions do not crash.
     if (!expanded) {
-      return null;
+      return new Text("", 0, 0);
     }
 
     // Expanded: special-case edit to show diff (matches default behavior much better)
@@ -100,7 +100,7 @@ function makeRenderResult(toolName: string, originalRenderResult?: any) {
 
     // Expanded: use original renderer if available
     if (originalRenderResult) {
-      return originalRenderResult(result, options, theme);
+      return originalRenderResult(result, options, theme, context);
     }
 
     // Expanded fallback: show raw text content
