@@ -116,19 +116,29 @@ const VALID_TOOL_NAMES: BuiltInToolName[] = ["read", "bash", "edit", "write", "g
 const VALID_TOOL_SET = new Set<string>(VALID_TOOL_NAMES);
 const DEFAULT_TOOL_NAMES: BuiltInToolName[] = ["read", "bash", "edit", "write"];
 
-function parseToolSelectionFromArgv(argv: string[]): { noTools: boolean; tools?: BuiltInToolName[] } {
+function parseToolSelectionFromArgv(argv: string[]): {
+  noTools: boolean;
+  noBuiltinTools: boolean;
+  tools?: BuiltInToolName[];
+} {
   let noTools = false;
+  let noBuiltinTools = false;
   let toolsRaw: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--no-tools") {
+    if (arg === "--no-tools" || arg === "-nt") {
       noTools = true;
       continue;
     }
 
-    // pi itself only supports `--tools <list>`, but we also accept `--tools=<list>`.
-    if (arg === "--tools" && i + 1 < argv.length) {
+    if (arg === "--no-builtin-tools" || arg === "-nbt") {
+      noBuiltinTools = true;
+      continue;
+    }
+
+    // Support pi's long + short flag forms, including `--tools=<list>` / `-t=<list>`.
+    if ((arg === "--tools" || arg === "-t") && i + 1 < argv.length) {
       toolsRaw = argv[i + 1];
       i++;
       continue;
@@ -138,9 +148,14 @@ function parseToolSelectionFromArgv(argv: string[]): { noTools: boolean; tools?:
       toolsRaw = arg.slice("--tools=".length);
       continue;
     }
+
+    if (arg.startsWith("-t=")) {
+      toolsRaw = arg.slice("-t=".length);
+      continue;
+    }
   }
 
-  if (!toolsRaw) return { noTools, tools: undefined };
+  if (!toolsRaw) return { noTools, noBuiltinTools, tools: undefined };
 
   const parsed = toolsRaw
     .split(",")
@@ -152,17 +167,19 @@ function parseToolSelectionFromArgv(argv: string[]): { noTools: boolean; tools?:
   const seen = new Set<string>();
   const tools = parsed.filter((name) => (seen.has(name) ? false : (seen.add(name), true)));
 
-  return { noTools, tools };
+  return { noTools, noBuiltinTools, tools };
 }
 
 function getToolNamesToOverride(): BuiltInToolName[] {
-  const { noTools, tools } = parseToolSelectionFromArgv(process.argv.slice(2));
+  const { noTools, noBuiltinTools, tools } = parseToolSelectionFromArgv(process.argv.slice(2));
 
-  // Mirror pi semantics:
+  // Mirror pi semantics for built-in tool wrapping:
   // - default: read,bash,edit,write
-  // - --tools: explicit list
-  // - --no-tools: none (unless --tools is also specified)
+  // - --tools / -t: explicit allowlist (filtered to built-in tool names)
+  // - --no-tools / -nt: none (unless --tools is also specified)
+  // - --no-builtin-tools / -nbt: built-ins disabled by default, unless explicitly allowlisted
   if (noTools) return tools ?? [];
+  if (noBuiltinTools) return tools ?? [];
   return tools ?? DEFAULT_TOOL_NAMES;
 }
 

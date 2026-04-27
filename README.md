@@ -51,7 +51,7 @@ Examples:
 ```bash
 git clone https://github.com/xRyul/pi-collapse-tools
 cd pi-collapse-tools
-pi -e ./collapse-tools.ts
+pi -e ./index.ts
 ```
 
 ## License
