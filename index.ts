@@ -11,13 +11,13 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
-  createBashTool,
-  createEditTool,
-  createFindTool,
-  createGrepTool,
-  createLsTool,
-  createReadTool,
-  createWriteTool,
+  createBashToolDefinition,
+  createEditToolDefinition,
+  createFindToolDefinition,
+  createGrepToolDefinition,
+  createLsToolDefinition,
+  createReadToolDefinition,
+  createWriteToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 
@@ -75,6 +75,8 @@ function renderSimpleDiff(diffText: string, theme: any): string {
     .join("\n");
 }
 
+const ORIGINAL_RESULT_COMPONENT = Symbol("pi-collapse-tools.originalResultComponent");
+
 // Render the result: hidden by default, shown when expanded
 function makeRenderResult(toolName: string, originalRenderResult?: any) {
   return (result: any, options: any, theme: any, context: any) => {
@@ -98,9 +100,16 @@ function makeRenderResult(toolName: string, originalRenderResult?: any) {
       }
     }
 
-    // Expanded: use original renderer if available
+    // Track the built-in renderer's component separately. The collapsed renderer
+    // returns Text, which may not match the component type the built-in expects.
     if (originalRenderResult) {
-      return originalRenderResult(result, options, theme, context);
+      const originalContext = {
+        ...context,
+        lastComponent: context.state[ORIGINAL_RESULT_COMPONENT],
+      };
+      const component = originalRenderResult(result, options, theme, originalContext);
+      context.state[ORIGINAL_RESULT_COMPONENT] = component;
+      return component;
     }
 
     // Expanded fallback: show raw text content
@@ -188,23 +197,19 @@ export default function (pi: ExtensionAPI) {
   const toolNames = getToolNamesToOverride();
 
   const factories: Record<BuiltInToolName, () => any> = {
-    read: () => createReadTool(cwd),
-    bash: () => createBashTool(cwd),
-    write: () => createWriteTool(cwd),
-    edit: () => createEditTool(cwd),
-    grep: () => createGrepTool(cwd),
-    find: () => createFindTool(cwd),
-    ls: () => createLsTool(cwd),
+    read: () => createReadToolDefinition(cwd),
+    bash: () => createBashToolDefinition(cwd),
+    write: () => createWriteToolDefinition(cwd),
+    edit: () => createEditToolDefinition(cwd),
+    grep: () => createGrepToolDefinition(cwd),
+    find: () => createFindToolDefinition(cwd),
+    ls: () => createLsToolDefinition(cwd),
   };
 
   for (const name of toolNames) {
     const tool = factories[name]();
     pi.registerTool({
-      name: tool.name,
-      label: tool.label,
-      description: tool.description,
-      parameters: tool.parameters,
-      execute: tool.execute,
+      ...tool,
       renderCall: makeRenderCall(tool.name),
       renderResult: makeRenderResult(tool.name, tool.renderResult),
     });

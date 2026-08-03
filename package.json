@@ -1,6 +1,6 @@
 {
   "name": "pi-collapse-tools",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Pi extension that hides tool output by default (expand with Cmd+O / Ctrl+O).",
   "license": "MIT",
   "author": "xryul",
@@ -23,9 +23,16 @@
     ],
     "image": "https://raw.githubusercontent.com/xRyul/pi-collapse-tools/main/assets/demo.webp"
   },
+  "scripts": {
+    "test": "node --test index.test.mjs"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.83.0",
+    "@earendil-works/pi-tui": "^0.83.0"
   },
   "files": [
     "index.ts",
