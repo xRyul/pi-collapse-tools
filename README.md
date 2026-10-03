@@ -8,6 +8,18 @@ A **pi** extension that keeps your chat clean by hiding tool output by default.
 - Tool results render **nothing** unless expanded.
 - Press **Cmd+O** (macOS) / **Ctrl+O** (other terminals) to expand tool output.
 
+On Pi 1.0.1+, codemode keeps Pi's compact nested tool rows, including status icons, arguments, timings, and costs. Only the script and output are hidden until expanded. Other tool renderers are passed through unchanged.
+
+## Codemode: before and after
+
+### Before
+
+![Codemode before: script and output visible](assets/codemode-before.png)
+
+### After
+
+![Codemode after: compact tool rows with arguments and timings](assets/codemode-after.png)
+
 ## Install
 
 ### Option A: Install from npm (recommended)

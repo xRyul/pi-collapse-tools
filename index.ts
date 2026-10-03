@@ -9,7 +9,7 @@
  * overrides the built-in tools enabled via `--tools` / `--no-tools`.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import {
   createBashToolDefinition,
   createEditToolDefinition,
@@ -19,7 +19,7 @@ import {
   createReadToolDefinition,
   createWriteToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 
 // Render the tool call line showing tool name + key parameters
 function makeRenderCall(toolName: string) {
@@ -119,6 +119,37 @@ function makeRenderResult(toolName: string, originalRenderResult?: any) {
   };
 }
 
+const ORIGINAL_CALL_COMPONENT = Symbol("pi-collapse-tools.originalCallComponent");
+
+function makeCodemodeRenderers(original: ToolRenderers): ToolRenderers {
+  return {
+    ...original,
+    renderCall(args, theme, context) {
+      if (context.expanded && original.renderCall) {
+        const component = original.renderCall(args, theme, {
+          ...context, lastComponent: context.state[ORIGINAL_CALL_COMPONENT],
+        });
+        context.state[ORIGINAL_CALL_COMPONENT] = component;
+        return component;
+      }
+      return new Text(theme.fg("toolTitle", theme.bold("codemode")), 0, 0);
+    },
+    renderResult(result, options, theme, context) {
+      if (!original.renderResult) return new Text("", 0, 0);
+      // Keep the native call rows (arguments, timing, cost); hide only script output.
+      const visibleResult = options.expanded ? result : { ...result, content: [] };
+      const component = original.renderResult(visibleResult, options, theme, {
+        ...context, lastComponent: context.state[ORIGINAL_RESULT_COMPONENT],
+      });
+      if (!options.expanded && component instanceof Container && component.children[0] instanceof Spacer) {
+        component.removeChild(component.children[0]);
+      }
+      context.state[ORIGINAL_RESULT_COMPONENT] = component;
+      return component;
+    },
+  };
+}
+
 type BuiltInToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls";
 
 const VALID_TOOL_NAMES: BuiltInToolName[] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
@@ -214,6 +245,13 @@ export default function (pi: ExtensionAPI) {
       renderResult: makeRenderResult(tool.name, tool.renderResult),
     });
   }
+
+  // Always resolve the existing renderer: returning undefined would hide it.
+  pi.registerToolRenderer?.((name, next) => {
+    const original = next();
+    if (name !== "codemode" || !original) return original;
+    return makeCodemodeRenderers(original);
+  });
 
   pi.on("session_start", async (_event, ctx) => {
     const wrapped = toolNames.length > 0 ? toolNames.join(", ") : "none";
