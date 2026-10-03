@@ -14,11 +14,11 @@ On Pi 1.0.1+, codemode keeps Pi's compact nested tool rows, including status ico
 
 ### Before
 
-![Codemode before: script and output visible](assets/codemode-before.png)
+![Codemode before: script and output visible](https://raw.githubusercontent.com/xRyul/pi-collapse-tools/main/assets/codemode-before.png)
 
 ### After
 
-![Codemode after: compact tool rows with arguments and timings](assets/codemode-after.png)
+![Codemode after: compact tool rows with arguments and timings](https://raw.githubusercontent.com/xRyul/pi-collapse-tools/main/assets/codemode-after.png)
 
 ## Install
 
