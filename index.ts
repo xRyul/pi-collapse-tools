@@ -18,6 +18,7 @@ import {
   createLsToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
+  estimateTokens,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 
@@ -126,6 +127,17 @@ type CodemodeIndicator = {
   timer?: ReturnType<typeof setInterval>;
   finish: () => void;
 };
+type CollapseCodemodeDetails = CodemodeToolDetails & { collapseToolsContextWindow?: number };
+
+function formatCodemodeTokens(tokens: number, contextWindow?: number): string {
+  const summary = `Tokens ~${tokens.toLocaleString("en-US")}`;
+  if (typeof contextWindow !== "number" || !Number.isFinite(contextWindow) || contextWindow <= 0) {
+    return summary;
+  }
+  const percent = (tokens / contextWindow) * 100;
+  const percentage = percent > 0 && percent < 0.001 ? "<0.001" : percent.toFixed(3);
+  return `${summary} (${percentage}%)`;
+}
 
 function makeCodemodeRenderers(
   original: ToolRenderers,
@@ -174,7 +186,8 @@ function makeCodemodeRenderers(
     },
     renderResult(result, options, theme, context) {
       if (!original.renderResult) return new Text("", 0, 0);
-      const calls = (result.details as CodemodeToolDetails | undefined)?.calls ?? [];
+      const details = result.details as CollapseCodemodeDetails | undefined;
+      const calls = details?.calls ?? [];
       let clock = context.state[CODEMODE_RESULT_TIMER] as {
         startedAt: number; finishedAt?: number;
       } | undefined;
@@ -198,9 +211,23 @@ function makeCodemodeRenderers(
       if (!options.expanded && component instanceof Container && component.children[0] instanceof Spacer) {
         component.removeChild(component.children[0]);
       }
-      if (!options.expanded && clock && component instanceof Container) {
-        const seconds = Math.max(0, ((clock.finishedAt ?? Date.now()) - clock.startedAt) / 1000);
-        component.addChild(new Text(theme.fg("dim", `${seconds.toFixed(1)}s`), 0, 0));
+      if (!options.expanded && component instanceof Container) {
+        const footer: string[] = [];
+        if (clock) {
+          const elapsedMs = Math.max(0, (clock.finishedAt ?? Date.now()) - clock.startedAt);
+          footer.push(elapsedMs < 1000 ? `${Math.round(elapsedMs)}ms` : `${(elapsedMs / 1000).toFixed(1)}s`);
+        }
+        if (!options.isPartial) {
+          // Estimate the actual returned content, not the empty collapsed preview.
+          const tokens = estimateTokens({
+            role: "toolResult", toolCallId: context.toolCallId, toolName: "codemode",
+            content: result.content ?? [], isError: context.isError, timestamp: 0,
+          });
+          footer.push(formatCodemodeTokens(tokens, details?.collapseToolsContextWindow));
+        }
+        if (footer.length > 0) {
+          component.addChild(new Text(theme.fg("dim", footer.join(" · ")), 0, 0));
+        }
       }
       context.state[ORIGINAL_RESULT_COMPONENT] = component;
       return component;
@@ -291,6 +318,17 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_end", stopIndicators);
   pi.on("session_shutdown", stopIndicators);
   pi.on("session_start", stopIndicators);
+
+  pi.on("tool_result", (event, ctx) => {
+    if (event.toolName !== "codemode") return;
+    // Persist UI-only context capacity without changing model-facing output.
+    return {
+      details: {
+        ...(event.details as CodemodeToolDetails | undefined),
+        collapseToolsContextWindow: ctx.getContextUsage()?.contextWindow ?? ctx.model?.contextWindow,
+      },
+    };
+  });
 
   const factories: Record<BuiltInToolName, () => any> = {
     read: () => createReadToolDefinition(cwd),

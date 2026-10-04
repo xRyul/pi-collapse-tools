@@ -12,7 +12,9 @@ On Pi 1.0.1+, codemode keeps Pi's compact nested tool rows, including status ico
 
 The collapsed codemode header shows animated `•••` while its script is being generated or executed. The dots disappear on completion or cancellation.
 
-A plain seconds counter appears below the tool rows if the script keeps running after the currently listed tools finish. It starts at `0.0s` and freezes on completion or cancellation.
+A plain elapsed-time counter appears below the tool rows if the script keeps running after the currently listed tools finish. It shows milliseconds below one second (e.g. `17ms`), then seconds (e.g. `1.4s`), and freezes on completion or cancellation.
+
+Once codemode completes, the collapsed footer adds an estimated output-token count and its percentage of the active model's context capacity, e.g. `700ms · Tokens ~1,024 (0.512%)`. It counts the final content returned to the model, not intermediate output filtered away by the script or billed token usage. The percentage is omitted if context capacity is unavailable.
 
 ## Codemode: before and after
 

@@ -195,7 +195,7 @@ test("codemode keeps native tool metadata while hiding the script and output", a
       assert.match(plain(output), /secret-error/);
     } else {
       assert.equal(plain(call), "codemode");
-      assert.equal(plain(output), nativeRows);
+      assert.equal(plain(output), `${nativeRows}\nTokens ~4`);
       assert.match(stripAnsi(output.render(200)[0]).trim(), /^✓ bash/,
         "collapsed tool rows must start immediately, without a blank line");
       assert.match(plain(output), /bash secret-argument 123ms/);
@@ -211,7 +211,60 @@ test("codemode keeps native tool metadata while hiding the script and output", a
   assert.equal(plain(renderers.renderResult(result, { expanded: false, isPartial: true }, theme, context)),
     nativeRows);
   assert.equal(plain(renderers.renderResult({ content: [], details: undefined },
-    { expanded: false, isPartial: false }, theme, context)), "");
+    { expanded: false, isPartial: false }, theme, context)), "Tokens ~0");
+
+  const tokenHook = extension.handlers.get("tool_result")?.[0];
+  assert.equal(typeof tokenHook, "function", "record context capacity on codemode results");
+  const event = {
+    type: "tool_result", toolName: "codemode", toolCallId: "tokens", input: args,
+    ...result, isError: false,
+  };
+  const hookContext = {
+    getContextUsage: () => ({ contextWindow: 272_000 }),
+    model: { contextWindow: 200_000 },
+  };
+  const update = await tokenHook(event, hookContext);
+  assert.equal(update.details.collapseToolsContextWindow, 272_000);
+  assert.deepEqual(update.details.calls, result.details.calls);
+  assert.equal(Object.hasOwn(update, "content"), false, "UI metadata must not replace model-facing output");
+  assert.equal(Object.hasOwn(result.details, "collapseToolsContextWindow"), false);
+  const fallback = await tokenHook(event, { ...hookContext, getContextUsage: () => undefined });
+  assert.equal(fallback.details.collapseToolsContextWindow, 200_000);
+  assert.equal(await tokenHook({ ...event, toolName: "bash" }, hookContext), undefined);
+  const structuredContent = { output: "original-data" };
+  const pipelineResult = await runner.emitToolResult({ ...event, structuredContent });
+  assert.equal(pipelineResult.content, event.content, "the real hook pipeline must preserve content");
+  assert.equal(pipelineResult.structuredContent, structuredContent);
+  assert.deepEqual(pipelineResult.details.calls, event.details.calls);
+  assert.equal(await runner.emitToolResult({ ...event, toolName: "bash" }), undefined);
+
+  const tokenOutput = (output, isPartial = false) => plain(renderers.renderResult(
+    output, { expanded: false, isPartial }, theme, { ...context, state: {}, lastComponent: undefined },
+  ));
+  const filtered = {
+    ...result,
+    content: [{ type: "text", text: "x".repeat(272) }],
+    details: JSON.parse(JSON.stringify(update.details)),
+  };
+  assert.equal(tokenOutput(filtered), `${nativeRows}\nTokens ~68 (0.025%)`,
+    "estimate final returned content, with context metadata surviving session serialization");
+  assert.doesNotMatch(tokenOutput(filtered, true), /Tokens/, "no token footer while running");
+  assert.match(tokenOutput({ ...filtered, content: [{ type: "text", text: "x".repeat(400) }] }),
+    /Tokens ~100 \(0\.037%\)$/, "estimate content after any later result transformation");
+  assert.match(tokenOutput({ ...filtered, content: [{ type: "image", data: "", mimeType: "image/png" }] }),
+    /Tokens ~1,200 \(0\.441%\)$/, "use Pi's image token estimate even when output is hidden");
+
+  for (const [text, capacity, expected] of [
+    ["x".repeat(4096), 200_000, "Tokens ~1,024 (0.512%)"],
+    ["x", 1_000_000, "Tokens ~1 (<0.001%)"],
+    ["", 272_000, "Tokens ~0 (0.000%)"],
+    ...[undefined, 0, -1, NaN, Infinity].map((capacity) => ["x", capacity, "Tokens ~1"]),
+  ]) {
+    assert.equal(tokenOutput({
+      content: [{ type: "text", text }],
+      details: { calls: [], collapseToolsContextWindow: capacity },
+    }), expected);
+  }
 
   // Exercise Pi's real generation/execution lifecycle with a deterministic clock.
   t.mock.timers.enable({ apis: ["setInterval", "Date"] });
@@ -247,12 +300,12 @@ test("codemode keeps native tool metadata while hiding the script and output", a
   const lastLine = (tool) => tool.render(200).map((line) => stripAnsi(line).trim()).filter(Boolean).at(-1);
   const timed = makeExecution("result-timer");
   t.mock.timers.tick(1400);
-  assert.doesNotMatch(lastLine(timed), /^\d+\.\ds$/, "no timer during code generation");
+  assert.doesNotMatch(lastLine(timed), /^\d+(?:\.\d+)?(?:ms|s)$/, "no timer during code generation");
   timed.setArgsComplete();
   timed.markExecutionStarted();
   timed.updateResult(result, true);
   t.mock.timers.tick(1050);
-  assert.doesNotMatch(lastLine(timed), /^\d+\.\ds$/, "no timer while a tool is still running");
+  assert.doesNotMatch(lastLine(timed), /^\d+(?:\.\d+)?(?:ms|s)$/, "no timer while a tool is still running");
   const finishedTools = {
     ...result,
     details: { calls: result.details.calls.map((call) => ({
@@ -260,25 +313,35 @@ test("codemode keeps native tool metadata while hiding the script and output", a
     })) },
   };
   timed.updateResult(finishedTools, true);
-  assert.equal(lastLine(timed), "0.0s", "start timing only after the listed tools finish");
+  assert.equal(lastLine(timed), "0ms", "start timing only after the listed tools finish");
   t.mock.timers.tick(700);
-  assert.equal(lastLine(timed), "0.7s");
+  assert.equal(lastLine(timed), "700ms");
   assert.doesNotMatch(plain(timed), /Processing results/);
   timed.setExpanded(true);
   t.mock.timers.tick(700);
   timed.setExpanded(false);
   assert.equal(lastLine(timed), "1.4s", "expansion must not reset elapsed time");
   timed.updateResult(result, true);
-  assert.doesNotMatch(lastLine(timed), /^\d+\.\ds$/, "hide the timer if another tool starts");
+  assert.doesNotMatch(lastLine(timed), /^\d+(?:\.\d+)?(?:ms|s)$/, "hide the timer if another tool starts");
   timed.updateResult(finishedTools, true);
-  assert.equal(lastLine(timed), "0.0s", "restart timing after the new tool finishes");
+  assert.equal(lastLine(timed), "0ms", "restart timing after the new tool finishes");
   t.mock.timers.tick(700);
   timed.updateResult(finishedTools, false);
-  assert.equal(lastLine(timed), "0.7s");
+  assert.equal(lastLine(timed), "700ms · Tokens ~4");
   const frozenRedraws = redraws;
   t.mock.timers.tick(1400);
-  assert.equal(lastLine(timed), "0.7s", "freeze the final time when codemode returns");
+  assert.equal(lastLine(timed), "700ms · Tokens ~4", "freeze the final time when codemode returns");
   assert.equal(redraws, frozenRedraws);
+
+  for (const [elapsed, expected] of [[17, "17ms"], [999, "999ms"], [1000, "1.0s"]]) {
+    const quick = makeExecution(`duration-${elapsed}`);
+    quick.setArgsComplete();
+    quick.markExecutionStarted();
+    quick.updateResult(finishedTools, true);
+    t.mock.timers.tick(elapsed);
+    quick.updateResult(finishedTools, false);
+    assert.equal(lastLine(quick), `${expected} · Tokens ~4`, "match native tool duration formatting");
+  }
 
   const interrupted = makeExecution("interrupted-result-timer");
   interrupted.setArgsComplete();
@@ -286,9 +349,9 @@ test("codemode keeps native tool metadata while hiding the script and output", a
   interrupted.updateResult(finishedTools, true);
   t.mock.timers.tick(700);
   await runner.emit({ type: "agent_end", messages: [] });
-  assert.equal(lastLine(interrupted), "0.7s");
+  assert.equal(lastLine(interrupted), "700ms");
   t.mock.timers.tick(1400);
-  assert.equal(lastLine(interrupted), "0.7s", "cancellation must also freeze the timer");
+  assert.equal(lastLine(interrupted), "700ms", "cancellation must also freeze the timer");
 
   const cancelled = makeExecution("cancelled-codemode");
   cancelled.setExpanded(true);
