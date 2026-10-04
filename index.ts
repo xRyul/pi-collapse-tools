@@ -9,7 +9,7 @@
  * overrides the built-in tools enabled via `--tools` / `--no-tools`.
  */
 
-import type { ExtensionAPI, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import type { CodemodeToolDetails, ExtensionAPI, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import {
   createBashToolDefinition,
   createEditToolDefinition,
@@ -121,6 +121,7 @@ function makeRenderResult(toolName: string, originalRenderResult?: any) {
 
 const ORIGINAL_CALL_COMPONENT = Symbol("pi-collapse-tools.originalCallComponent");
 const CODEMODE_INDICATOR_FINISHED = Symbol("pi-collapse-tools.codemodeIndicatorFinished");
+const CODEMODE_RESULT_TIMER = Symbol("pi-collapse-tools.codemodeResultTimer");
 type CodemodeIndicator = {
   timer?: ReturnType<typeof setInterval>;
   finish: () => void;
@@ -173,6 +174,22 @@ function makeCodemodeRenderers(
     },
     renderResult(result, options, theme, context) {
       if (!original.renderResult) return new Text("", 0, 0);
+      const calls = (result.details as CodemodeToolDetails | undefined)?.calls ?? [];
+      let clock = context.state[CODEMODE_RESULT_TIMER] as {
+        startedAt: number; finishedAt?: number;
+      } | undefined;
+      const toolsFinished = context.executionStarted && calls.length > 0 &&
+        calls.every((call) => call.status !== "running");
+      if (!toolsFinished) {
+        delete context.state[CODEMODE_RESULT_TIMER];
+        clock = undefined;
+      } else if (!clock && options.isPartial && !context.state[CODEMODE_INDICATOR_FINISHED]) {
+        clock = { startedAt: Date.now() };
+        context.state[CODEMODE_RESULT_TIMER] = clock;
+      }
+      if (clock && (!options.isPartial || context.state[CODEMODE_INDICATOR_FINISHED])) {
+        clock.finishedAt ??= Date.now();
+      }
       // Keep the native call rows (arguments, timing, cost); hide only script output.
       const visibleResult = options.expanded ? result : { ...result, content: [] };
       const component = original.renderResult(visibleResult, options, theme, {
@@ -180,6 +197,10 @@ function makeCodemodeRenderers(
       });
       if (!options.expanded && component instanceof Container && component.children[0] instanceof Spacer) {
         component.removeChild(component.children[0]);
+      }
+      if (!options.expanded && clock && component instanceof Container) {
+        const seconds = Math.max(0, ((clock.finishedAt ?? Date.now()) - clock.startedAt) / 1000);
+        component.addChild(new Text(theme.fg("dim", `${seconds.toFixed(1)}s`), 0, 0));
       }
       context.state[ORIGINAL_RESULT_COMPONENT] = component;
       return component;

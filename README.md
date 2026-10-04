@@ -12,6 +12,8 @@ On Pi 1.0.1+, codemode keeps Pi's compact nested tool rows, including status ico
 
 The collapsed codemode header shows animated `•••` while its script is being generated or executed. The dots disappear on completion or cancellation.
 
+A plain seconds counter appears below the tool rows if the script keeps running after the currently listed tools finish. It starts at `0.0s` and freezes on completion or cancellation.
+
 ## Codemode: before and after
 
 ### Before

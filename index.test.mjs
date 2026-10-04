@@ -244,6 +244,52 @@ test("codemode keeps native tool metadata while hiding the script and output", a
   t.mock.timers.tick(700);
   assert.equal(redraws, completedRedraws, "completed calls must stop their animation");
 
+  const lastLine = (tool) => tool.render(200).map((line) => stripAnsi(line).trim()).filter(Boolean).at(-1);
+  const timed = makeExecution("result-timer");
+  t.mock.timers.tick(1400);
+  assert.doesNotMatch(lastLine(timed), /^\d+\.\ds$/, "no timer during code generation");
+  timed.setArgsComplete();
+  timed.markExecutionStarted();
+  timed.updateResult(result, true);
+  t.mock.timers.tick(1050);
+  assert.doesNotMatch(lastLine(timed), /^\d+\.\ds$/, "no timer while a tool is still running");
+  const finishedTools = {
+    ...result,
+    details: { calls: result.details.calls.map((call) => ({
+      ...call, status: call.status === "running" ? "ok" : call.status,
+    })) },
+  };
+  timed.updateResult(finishedTools, true);
+  assert.equal(lastLine(timed), "0.0s", "start timing only after the listed tools finish");
+  t.mock.timers.tick(700);
+  assert.equal(lastLine(timed), "0.7s");
+  assert.doesNotMatch(plain(timed), /Processing results/);
+  timed.setExpanded(true);
+  t.mock.timers.tick(700);
+  timed.setExpanded(false);
+  assert.equal(lastLine(timed), "1.4s", "expansion must not reset elapsed time");
+  timed.updateResult(result, true);
+  assert.doesNotMatch(lastLine(timed), /^\d+\.\ds$/, "hide the timer if another tool starts");
+  timed.updateResult(finishedTools, true);
+  assert.equal(lastLine(timed), "0.0s", "restart timing after the new tool finishes");
+  t.mock.timers.tick(700);
+  timed.updateResult(finishedTools, false);
+  assert.equal(lastLine(timed), "0.7s");
+  const frozenRedraws = redraws;
+  t.mock.timers.tick(1400);
+  assert.equal(lastLine(timed), "0.7s", "freeze the final time when codemode returns");
+  assert.equal(redraws, frozenRedraws);
+
+  const interrupted = makeExecution("interrupted-result-timer");
+  interrupted.setArgsComplete();
+  interrupted.markExecutionStarted();
+  interrupted.updateResult(finishedTools, true);
+  t.mock.timers.tick(700);
+  await runner.emit({ type: "agent_end", messages: [] });
+  assert.equal(lastLine(interrupted), "0.7s");
+  t.mock.timers.tick(1400);
+  assert.equal(lastLine(interrupted), "0.7s", "cancellation must also freeze the timer");
+
   const cancelled = makeExecution("cancelled-codemode");
   cancelled.setExpanded(true);
   await runner.emit({ type: "agent_end", messages: [] });
