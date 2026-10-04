@@ -10,6 +10,8 @@ A **pi** extension that keeps your chat clean by hiding tool output by default.
 
 On Pi 1.0.1+, codemode keeps Pi's compact nested tool rows, including status icons, arguments, timings, and costs. Only the script and output are hidden until expanded. Other tool renderers are passed through unchanged.
 
+The collapsed codemode header shows animated `•••` while its script is being generated or executed. The dots disappear on completion or cancellation.
+
 ## Codemode: before and after
 
 ### Before

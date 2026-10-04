@@ -120,11 +120,43 @@ function makeRenderResult(toolName: string, originalRenderResult?: any) {
 }
 
 const ORIGINAL_CALL_COMPONENT = Symbol("pi-collapse-tools.originalCallComponent");
+const CODEMODE_INDICATOR_FINISHED = Symbol("pi-collapse-tools.codemodeIndicatorFinished");
+type CodemodeIndicator = {
+  timer?: ReturnType<typeof setInterval>;
+  finish: () => void;
+};
 
-function makeCodemodeRenderers(original: ToolRenderers): ToolRenderers {
+function makeCodemodeRenderers(
+  original: ToolRenderers,
+  indicators: Map<string, CodemodeIndicator>,
+): ToolRenderers {
   return {
     ...original,
     renderCall(args, theme, context) {
+      const busy = context.isPartial && !context.state[CODEMODE_INDICATOR_FINISHED];
+      let indicator = indicators.get(context.toolCallId);
+      if (busy && !indicator) {
+        const entry: CodemodeIndicator = {
+          finish() {
+            context.state[CODEMODE_INDICATOR_FINISHED] = true;
+            clearInterval(entry.timer);
+            indicators.delete(context.toolCallId);
+            context.invalidate();
+          },
+        };
+        indicators.set(context.toolCallId, entry);
+        indicator = entry;
+      }
+      if (indicator) {
+        if (!busy || context.expanded) {
+          clearInterval(indicator.timer);
+          indicator.timer = undefined;
+          if (!busy) indicators.delete(context.toolCallId);
+        } else if (!indicator.timer) {
+          indicator.timer = setInterval(context.invalidate, 350);
+          indicator.timer.unref();
+        }
+      }
       if (context.expanded && original.renderCall) {
         const component = original.renderCall(args, theme, {
           ...context, lastComponent: context.state[ORIGINAL_CALL_COMPONENT],
@@ -132,7 +164,12 @@ function makeCodemodeRenderers(original: ToolRenderers): ToolRenderers {
         context.state[ORIGINAL_CALL_COMPONENT] = component;
         return component;
       }
-      return new Text(theme.fg("toolTitle", theme.bold("codemode")), 0, 0);
+      const title = theme.fg("toolTitle", theme.bold("codemode"));
+      const frame = Math.floor(Date.now() / 350) % 3;
+      const dots = busy ? " " + [0, 1, 2].map((dot) =>
+        theme.fg(dot === frame ? "warning" : "dim", "•"),
+      ).join("") : "";
+      return new Text(title + dots, 0, 0);
     },
     renderResult(result, options, theme, context) {
       if (!original.renderResult) return new Text("", 0, 0);
@@ -226,6 +263,13 @@ function getToolNamesToOverride(): BuiltInToolName[] {
 export default function (pi: ExtensionAPI) {
   const cwd = process.cwd();
   const toolNames = getToolNamesToOverride();
+  const indicators = new Map<string, CodemodeIndicator>();
+  const stopIndicators = () => {
+    for (const indicator of indicators.values()) indicator.finish();
+  };
+  pi.on("agent_end", stopIndicators);
+  pi.on("session_shutdown", stopIndicators);
+  pi.on("session_start", stopIndicators);
 
   const factories: Record<BuiltInToolName, () => any> = {
     read: () => createReadToolDefinition(cwd),
@@ -250,7 +294,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerToolRenderer?.((name, next) => {
     const original = next();
     if (name !== "codemode" || !original) return original;
-    return makeCodemodeRenderers(original);
+    return makeCodemodeRenderers(original, indicators);
   });
 
   pi.on("session_start", async (_event, ctx) => {

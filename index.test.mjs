@@ -17,6 +17,7 @@ import {
   createCodemodeExtension,
   initTheme,
   ExtensionRunner,
+  ToolExecutionComponent,
   discoverAndLoadExtensions,
 } from "@earendil-works/pi-coding-agent";
 
@@ -211,4 +212,53 @@ test("codemode keeps native tool metadata while hiding the script and output", a
     nativeRows);
   assert.equal(plain(renderers.renderResult({ content: [], details: undefined },
     { expanded: false, isPartial: false }, theme, context)), "");
+
+  // Exercise Pi's real generation/execution lifecycle with a deterministic clock.
+  t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+  let redraws = 0;
+  const ui = { requestRender() { redraws++; } };
+  const makeExecution = (id) => new ToolExecutionComponent(
+    "codemode", id, args, { showImages: false }, renderers, ui, extensionDir,
+  );
+  const execution = makeExecution("busy-codemode");
+  const generating = execution.render(200).join("\n");
+  assert.match(stripAnsi(generating), /codemode •••/);
+  assert.doesNotMatch(stripAnsi(generating), /secret-argument/);
+  t.mock.timers.tick(350);
+  assert.ok(redraws > 0, "the dots should request redraws while generating");
+  assert.notEqual(execution.render(200).join("\n"), generating, "the highlighted dot should move");
+
+  execution.setArgsComplete();
+  execution.markExecutionStarted();
+  execution.updateResult(result, true);
+  assert.match(stripAnsi(execution.render(200).join("\n")), /codemode •••/);
+  assert.match(stripAnsi(execution.render(200).join("\n")), /123ms/);
+  execution.setExpanded(true);
+  const expandedRedraws = redraws;
+  t.mock.timers.tick(700);
+  assert.equal(redraws, expandedRedraws, "pause the hidden animation when expanded");
+  execution.setExpanded(false);
+  execution.updateResult(result, false);
+  assert.doesNotMatch(stripAnsi(execution.render(200).join("\n")), /•••/);
+  const completedRedraws = redraws;
+  t.mock.timers.tick(700);
+  assert.equal(redraws, completedRedraws, "completed calls must stop their animation");
+
+  const cancelled = makeExecution("cancelled-codemode");
+  cancelled.setExpanded(true);
+  await runner.emit({ type: "agent_end", messages: [] });
+  cancelled.setExpanded(false);
+  assert.doesNotMatch(stripAnsi(cancelled.render(200).join("\n")), /•••/);
+  const cancelledRedraws = redraws;
+  t.mock.timers.tick(700);
+  assert.equal(redraws, cancelledRedraws, "cancellation must not leave animation timers running");
+
+  for (const type of ["session_shutdown", "session_start"]) {
+    const pending = makeExecution(`cleanup-${type}`);
+    await runner.emit({ type });
+    assert.doesNotMatch(stripAnsi(pending.render(200).join("\n")), /•••/);
+    const stoppedRedraws = redraws;
+    t.mock.timers.tick(700);
+    assert.equal(redraws, stoppedRedraws, `${type} must clean up its animation`);
+  }
 });
