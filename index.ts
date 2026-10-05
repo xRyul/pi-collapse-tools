@@ -142,11 +142,14 @@ function formatCodemodeTokens(tokens: number, contextWindow?: number): string {
 function makeCodemodeRenderers(
   original: ToolRenderers,
   indicators: Map<string, CodemodeIndicator>,
+  liveCalls: Set<string>,
 ): ToolRenderers {
   return {
     ...original,
     renderCall(args, theme, context) {
-      const busy = context.isPartial && !context.state[CODEMODE_INDICATOR_FINISHED];
+      // History rows can also be partial; only live events authorize animation.
+      const busy = liveCalls.has(context.toolCallId) && context.isPartial &&
+        !context.state[CODEMODE_INDICATOR_FINISHED];
       let indicator = indicators.get(context.toolCallId);
       if (busy && !indicator) {
         const entry: CodemodeIndicator = {
@@ -196,7 +199,8 @@ function makeCodemodeRenderers(
       if (!toolsFinished) {
         delete context.state[CODEMODE_RESULT_TIMER];
         clock = undefined;
-      } else if (!clock && options.isPartial && !context.state[CODEMODE_INDICATOR_FINISHED]) {
+      } else if (!clock && options.isPartial && liveCalls.has(context.toolCallId) &&
+        !context.state[CODEMODE_INDICATOR_FINISHED]) {
         clock = { startedAt: Date.now() };
         context.state[CODEMODE_RESULT_TIMER] = clock;
       }
@@ -312,12 +316,30 @@ export default function (pi: ExtensionAPI) {
   const cwd = process.cwd();
   const toolNames = getToolNamesToOverride();
   const indicators = new Map<string, CodemodeIndicator>();
+  const liveCalls = new Set<string>();
   const stopIndicators = () => {
+    liveCalls.clear();
     for (const indicator of indicators.values()) indicator.finish();
   };
   pi.on("agent_end", stopIndicators);
   pi.on("session_shutdown", stopIndicators);
   pi.on("session_start", stopIndicators);
+  pi.on("session_tree", stopIndicators);
+
+  pi.on("message_update", (event) => {
+    if (event.message.role !== "assistant") return;
+    for (const content of event.message.content) {
+      if (content.type === "toolCall" && content.name === "codemode") liveCalls.add(content.id);
+    }
+  });
+  pi.on("tool_execution_start", (event) => {
+    if (event.toolName === "codemode") liveCalls.add(event.toolCallId);
+  });
+  pi.on("tool_execution_end", (event) => {
+    if (event.toolName !== "codemode") return;
+    liveCalls.delete(event.toolCallId);
+    indicators.get(event.toolCallId)?.finish();
+  });
 
   pi.on("tool_result", (event, ctx) => {
     if (event.toolName !== "codemode") return;
@@ -353,7 +375,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerToolRenderer?.((name, next) => {
     const original = next();
     if (name !== "codemode" || !original) return original;
-    return makeCodemodeRenderers(original, indicators);
+    return makeCodemodeRenderers(original, indicators, liveCalls);
   });
 
   pi.on("session_start", async (_event, ctx) => {

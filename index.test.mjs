@@ -270,10 +270,30 @@ test("codemode keeps native tool metadata while hiding the script and output", a
   t.mock.timers.enable({ apis: ["setInterval", "Date"] });
   let redraws = 0;
   const ui = { requestRender() { redraws++; } };
-  const makeExecution = (id) => new ToolExecutionComponent(
-    "codemode", id, args, { showImages: false }, renderers, ui, extensionDir,
-  );
-  const execution = makeExecution("busy-codemode");
+  const makeExecution = async (id, live = true) => {
+    if (live) {
+      const message = { role: "assistant", content: [{ type: "toolCall", name: "codemode", id, arguments: args }] };
+      await runner.emit({
+        type: "message_update", message,
+        assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial: message },
+      });
+    }
+    return new ToolExecutionComponent(
+      "codemode", id, args, { showImages: false }, renderers, ui, extensionDir,
+    );
+  };
+
+  // /tree rebuilds a historical call with isPartial=true when its result is beyond the selected leaf.
+  const historical = await makeExecution("historical-codemode", false);
+  assert.doesNotMatch(plain(historical), /•••/, "a history row without a result is not live work");
+  const historyRedraws = redraws;
+  t.mock.timers.tick(700);
+  assert.equal(redraws, historyRedraws, "historical rows must not create animation timers");
+
+  const execution = await makeExecution("busy-codemode");
+  historical.setExpanded(true);
+  historical.setExpanded(false);
+  assert.doesNotMatch(plain(historical), /•••/, "old rows must remain idle while a new call is live");
   const generating = execution.render(200).join("\n");
   assert.match(stripAnsi(generating), /codemode •••/);
   assert.doesNotMatch(stripAnsi(generating), /secret-argument/);
@@ -291,14 +311,20 @@ test("codemode keeps native tool metadata while hiding the script and output", a
   t.mock.timers.tick(700);
   assert.equal(redraws, expandedRedraws, "pause the hidden animation when expanded");
   execution.setExpanded(false);
+  await runner.emit({
+    type: "tool_execution_end", toolName: "codemode", toolCallId: "busy-codemode", result, isError: false,
+  });
+  assert.doesNotMatch(plain(execution), /•••/, "execution-end must stop the dots before the final UI update");
   execution.updateResult(result, false);
   assert.doesNotMatch(stripAnsi(execution.render(200).join("\n")), /•••/);
   const completedRedraws = redraws;
   t.mock.timers.tick(700);
   assert.equal(redraws, completedRedraws, "completed calls must stop their animation");
+  const completedHistory = await makeExecution("busy-codemode", false);
+  assert.doesNotMatch(plain(completedHistory), /•••/, "rebuilding a completed call before its result must stay idle");
 
   const lastLine = (tool) => tool.render(200).map((line) => stripAnsi(line).trim()).filter(Boolean).at(-1);
-  const timed = makeExecution("result-timer");
+  const timed = await makeExecution("result-timer");
   t.mock.timers.tick(1400);
   assert.doesNotMatch(lastLine(timed), /^\d+(?:\.\d+)?(?:ms|s)$/, "no timer during code generation");
   timed.setArgsComplete();
@@ -334,7 +360,7 @@ test("codemode keeps native tool metadata while hiding the script and output", a
   assert.equal(redraws, frozenRedraws);
 
   for (const [elapsed, expected] of [[17, "17ms"], [999, "999ms"], [1000, "1.0s"]]) {
-    const quick = makeExecution(`duration-${elapsed}`);
+    const quick = await makeExecution(`duration-${elapsed}`);
     quick.setArgsComplete();
     quick.markExecutionStarted();
     quick.updateResult(finishedTools, true);
@@ -343,7 +369,20 @@ test("codemode keeps native tool metadata while hiding the script and output", a
     assert.equal(lastLine(quick), `${expected} · Tokens ~4`, "match native tool duration formatting");
   }
 
-  const interrupted = makeExecution("interrupted-result-timer");
+  // Tool execution can begin without a streamed call (e.g. an SDK-issued call).
+  const directId = "execution-without-stream";
+  await runner.emit({ type: "tool_execution_start", toolName: "codemode", toolCallId: directId, args });
+  const direct = await makeExecution(directId, false);
+  assert.match(plain(direct), /•••/, "execution-start must animate genuinely live calls");
+  await runner.emit({
+    type: "tool_execution_end", toolName: "codemode", toolCallId: directId, result: finishedTools, isError: false,
+  });
+  assert.doesNotMatch(plain(direct), /•••/);
+  const directRedraws = redraws;
+  t.mock.timers.tick(700);
+  assert.equal(redraws, directRedraws, "execution-end must dispose the animation timer");
+
+  const interrupted = await makeExecution("interrupted-result-timer");
   interrupted.setArgsComplete();
   interrupted.markExecutionStarted();
   interrupted.updateResult(finishedTools, true);
@@ -353,7 +392,7 @@ test("codemode keeps native tool metadata while hiding the script and output", a
   t.mock.timers.tick(1400);
   assert.equal(lastLine(interrupted), "700ms", "cancellation must also freeze the timer");
 
-  const cancelled = makeExecution("cancelled-codemode");
+  const cancelled = await makeExecution("cancelled-codemode");
   cancelled.setExpanded(true);
   await runner.emit({ type: "agent_end", messages: [] });
   cancelled.setExpanded(false);
@@ -362,12 +401,16 @@ test("codemode keeps native tool metadata while hiding the script and output", a
   t.mock.timers.tick(700);
   assert.equal(redraws, cancelledRedraws, "cancellation must not leave animation timers running");
 
-  for (const type of ["session_shutdown", "session_start"]) {
-    const pending = makeExecution(`cleanup-${type}`);
-    await runner.emit({ type });
+  for (const type of ["session_shutdown", "session_start", "session_tree"]) {
+    const pending = await makeExecution(`cleanup-${type}`);
+    await runner.emit({ type, oldLeafId: "old", newLeafId: "summary" });
     assert.doesNotMatch(stripAnsi(pending.render(200).join("\n")), /•••/);
     const stoppedRedraws = redraws;
     t.mock.timers.tick(700);
     assert.equal(redraws, stoppedRedraws, `${type} must clean up its animation`);
+    const rebuilt = await makeExecution(`cleanup-${type}`, false);
+    assert.doesNotMatch(plain(rebuilt), /•••/, `${type} must not reactivate rebuilt history`);
+    t.mock.timers.tick(700);
+    assert.equal(redraws, stoppedRedraws, "rebuilding a row must not restart its animation");
   }
 });
